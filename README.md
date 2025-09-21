@@ -31,3 +31,4 @@ python -m unittest -v
 ## Безопасность
 - Не коммитьте `.telegram_token` и `reminders.db` — они в `.gitignore`.
 - Рекомендуется револьвировать токен при публикации.
+# reminderBot
