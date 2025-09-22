@@ -88,6 +88,17 @@ class ParseTests(unittest.TestCase):
         self.assertIsNotNone(parsed)
         self.assertGreater(parsed.when_utc, rb.now_utc())
 
+    def test_parse_th_duration_and_datetime(self):
+        # Thai duration: "2 ชม 15 นาที"
+        delta, text = rb.parse_duration_prefix("2 ชม 15 นาที งาน")
+        self.assertIsNotNone(delta)
+        self.assertEqual(text, "งาน")
+        self.assertAlmostEqual(delta.total_seconds(), (2*3600 + 15*60), delta=2)
+        # Thai datetime: "พรุ่งนี้ 9:30"
+        tz = rb.get_tz("Asia/Bangkok")
+        parsed = rb.parse_at_datetime("พรุ่งนี้ 9:30 ทดสอบ", tz)
+        self.assertIsNotNone(parsed)
+
 
 class DBAndHandlersAsyncTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -115,6 +126,36 @@ class DBAndHandlersAsyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Europe/Berlin", "\n".join(upd2.effective_message.replies))
         tz = await self.db.get_user_tz(self.chat_id, self.user_id)
         self.assertEqual(tz, "Europe/Berlin")
+
+    async def test_lang_set_en_th_and_help(self):
+        handlers = self.handlers
+        # set EN
+        upd_en = FakeUpdate(self.chat_id, self.user_id, "/lang en")
+        await handlers.cmd_lang(upd_en, FakeContext(["en"]))
+        lang = await self.db.get_user_lang(self.chat_id, self.user_id)
+        self.assertEqual(lang, "en")
+        # set TH
+        upd_th = FakeUpdate(self.chat_id, self.user_id, "/lang th")
+        await handlers.cmd_lang(upd_th, FakeContext(["th"]))
+        lang2 = await self.db.get_user_lang(self.chat_id, self.user_id)
+        self.assertEqual(lang2, "th")
+        # /help behaves like /start (uses same handler)
+        upd_help = FakeUpdate(self.chat_id, self.user_id, "/help")
+        await handlers.start(upd_help, FakeContext())
+        out = "\n".join(upd_help.effective_message.replies)
+        self.assertIn("/lang", out)
+        self.assertIn("/tz", out)
+
+    async def test_in_with_thai_units(self):
+        # set Thai first
+        await self.handlers.cmd_lang(FakeUpdate(self.chat_id, self.user_id, "/lang th"), FakeContext(["th"]))
+        upd = FakeUpdate(self.chat_id, self.user_id, "/in 1 ชม 30 นาที ทดสอบ")
+        await self.handlers.cmd_in(upd, FakeContext())
+        rows = await self.db.get_active_for_user(self.chat_id, self.user_id)
+        self.assertEqual(len(rows), 1)
+        # response contains confirmation
+        resp = "\n".join(upd.effective_message.replies)
+        self.assertTrue(resp)
 
     async def test_in_schedules_and_persists(self):
         upd = FakeUpdate(self.chat_id, self.user_id, "/in 1m тест")

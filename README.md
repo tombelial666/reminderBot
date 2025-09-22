@@ -28,7 +28,16 @@ python remind_bot.py
 python -m unittest -v
 ```
 
+E2E (опционально, требует Telethon):
+```bash
+pip install -r requirements-dev.txt
+export E2E_TELEGRAM=1
+export E2E_API_ID=xxxx
+export E2E_API_HASH=yyyy
+export E2E_PHONE='+<phone>'
+export E2E_BOT_USERNAME='belialreminderbot'
+python -m unittest -v tests/test_e2e.py
+```
+
 ## Безопасность
-- Не коммитьте `.telegram_token` и `reminders.db` — они в `.gitignore`.
-- Рекомендуется револьвировать токен при публикации.
-# reminderBot
+- Не коммитьте `.telegram_token` и `reminders.db`

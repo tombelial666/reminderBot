@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reminder Tools</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 16px; background: #111; color: #eee; }
+    h1 { font-size: 18px; margin: 0 0 12px; }
+    .grid { display: grid; gap: 12px; }
+    button { padding: 12px 14px; border: 0; border-radius: 10px; background: #2a2a2a; color: #fff; font-size: 16px; }
+    button:active { transform: scale(0.98); }
+    .ok { color: #7CFC00; font-size: 14px; min-height: 18px; }
+  </style>
+</head>
+<body>
+  <h1>Reminder Tools</h1>
+  <div class="grid">
+    <button data-copy="/in ">Copy /in</button>
+    <button data-copy="/at ">Copy /at</button>
+    <button data-copy="/snooze ">Copy /snooze</button>
+    <div class="ok" id="ok"></div>
+  </div>
+  <script>
+    const ok = document.getElementById('ok');
+    function msg(text){ ok.textContent = text; setTimeout(()=> ok.textContent = '', 1500); }
+    async function copy(text){
+      try {
+        // Telegram WebApp may restrict clipboard; try API if available
+        if (window.Telegram && Telegram.WebApp && Telegram.WebApp.setClipboardText) {
+          Telegram.WebApp.setClipboardText(text);
+          msg('Copied');
+          return;
+        }
+        await navigator.clipboard.writeText(text);
+        msg('Copied');
+      } catch(e){ msg('Copy failed'); }
+    }
+    document.querySelectorAll('button[data-copy]').forEach(b => {
+      b.addEventListener('click', () => copy(b.dataset.copy));
+    });
+    if (window.Telegram && Telegram.WebApp && Telegram.WebApp.ready) {
+      Telegram.WebApp.ready();
+    }
+  </script>
+</body>
+</html>
