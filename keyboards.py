@@ -32,6 +32,9 @@ def inline_main_menu(lang: str = "ru", webapp_url: str | None = None) -> InlineK
             InlineKeyboardButton(t(lang, "btn_lang"), callback_data="open:lang"),
         ],
         [
+            InlineKeyboardButton(t(lang, "btn_sound"), callback_data="open:sound"),
+        ],
+        [
             InlineKeyboardButton("/at (hh:mm)", callback_data="open:at"),
             InlineKeyboardButton("/in (min)", callback_data="open:in"),
         ],
@@ -132,5 +135,6 @@ def inline_snooze_menu(lang: str, rid: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(t(lang, "snooze_15"), callback_data=f"snooze_do:{rid}:15"),
             InlineKeyboardButton(t(lang, "snooze_30"), callback_data=f"snooze_do:{rid}:30"),
             InlineKeyboardButton(t(lang, "snooze_60"), callback_data=f"snooze_do:{rid}:60"),
-        ]
+        ],
+        [InlineKeyboardButton(t(lang, "btn_done"), callback_data=f"done:{rid}")],
     ])

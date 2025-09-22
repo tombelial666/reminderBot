@@ -127,17 +127,22 @@ _BUNDLES: Dict[str, Dict[str, str]] = {
         ,"btn_lang": "Язык"
         ,"btn_back": "Назад"
         ,"btn_tools": "Инструменты"
+        ,"btn_sound": "Звук"
         ,"choose_action": "Выберите действие:"
         ,"choose_watch": "Выберите напоминание для наблюдения:"
         ,"choose_cancel": "Выберите напоминание для отмены:"
         ,"choose_lang": "Выберите язык:"
         ,"choose_tz": "Выберите часовой пояс:"
+        ,"choose_sound": "Выберите режим звука уведомлений:"
+        ,"sound_on": "🔔 Со звуком"
+        ,"sound_off": "🔕 Без звука"
         ,"choose_at_hour": "Выберите час (0–23):"
         ,"choose_at_min": "Выберите минуты (шаг 5):"
         ,"choose_in_min": "Через сколько минут (шаг 5):"
         ,"choose_at_date": "Выберите дату:"
         ,"btn_insert_cmd": "Вставить команду"
         ,"enter_text": "Введите текст напоминания и просто отправьте сообщением"
+        ,"btn_done": "Отметить прочитанным"
         ,"snooze_15": "+15м"
         ,"snooze_30": "+30м"
         ,"snooze_60": "+60м"
@@ -192,17 +197,22 @@ _BUNDLES: Dict[str, Dict[str, str]] = {
         ,"btn_lang": "ภาษา"
         ,"btn_back": "กลับ"
         ,"btn_tools": "เครื่องมือ"
+        ,"btn_sound": "เสียงแจ้งเตือน"
         ,"choose_action": "เลือกการทำงาน:"
         ,"choose_watch": "เลือกการเตือนเพื่อเฝ้าดู:"
         ,"choose_cancel": "เลือกการเตือนเพื่อยกเลิก:"
         ,"choose_lang": "เลือกภาษา:"
         ,"choose_tz": "เลือกโซนเวลา:"
+        ,"choose_sound": "เลือกโหมดเสียงแจ้งเตือน:"
+        ,"sound_on": "🔔 มีเสียง"
+        ,"sound_off": "🔕 ไม่มีเสียง"
         ,"choose_at_hour": "เลือกชั่วโมง (0–23):"
         ,"choose_at_min": "เลือกนาที (ทุก 5 นาที):"
         ,"choose_in_min": "ภายในกี่นาที (ทุก 5 นาที):"
         ,"choose_at_date": "เลือกวันที่:"
         ,"btn_insert_cmd": "แทรกคำสั่ง"
         ,"enter_text": "พิมพ์ข้อความเตือนแล้วส่งมาได้เลย"
+        ,"btn_done": "อ่านแล้ว"
         ,"snooze_15": "+15น"
         ,"snooze_30": "+30น"
         ,"snooze_60": "+60น"
@@ -257,17 +267,22 @@ _BUNDLES: Dict[str, Dict[str, str]] = {
         ,"btn_lang": "Language"
         ,"btn_back": "Back"
         ,"btn_tools": "Tools"
+        ,"btn_sound": "Sound"
         ,"choose_action": "Choose an action:"
         ,"choose_watch": "Choose a reminder to watch:"
         ,"choose_cancel": "Choose a reminder to cancel:"
         ,"choose_lang": "Choose language:"
         ,"choose_tz": "Choose timezone:"
+        ,"choose_sound": "Choose notification sound:"
+        ,"sound_on": "🔔 Sound on"
+        ,"sound_off": "🔕 Silent"
         ,"choose_at_hour": "Choose hour (0–23):"
         ,"choose_at_min": "Choose minutes (step 5):"
         ,"choose_in_min": "In how many minutes (step 5):"
         ,"choose_at_date": "Choose a date:"
         ,"btn_insert_cmd": "Insert command"
         ,"enter_text": "Type the reminder text and send it"
+        ,"btn_done": "Mark as read"
         ,"snooze_15": "+15m"
         ,"snooze_30": "+30m"
         ,"snooze_60": "+60m"
@@ -664,6 +679,35 @@ class ReminderDB:
             self.conn.commit()
         await asyncio.to_thread(_op)
 
+    async def get_user_sound(self, chat_id: int, user_id: int) -> bool:
+        def _op() -> bool:
+            cur = self.conn.cursor()
+            try:
+                cur.execute("SELECT sound FROM user_prefs WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+                row = cur.fetchone()
+                if row is None:
+                    return True
+                val = row["sound"] if isinstance(row, sqlite3.Row) else row[0]
+                return bool(int(val)) if isinstance(val, str) else bool(val)
+            except Exception:
+                return True
+        return await asyncio.to_thread(_op)
+
+    async def set_user_sound(self, chat_id: int, user_id: int, on: bool) -> None:
+        def _op() -> None:
+            cur = self.conn.cursor()
+            try:
+                cur.execute("ALTER TABLE user_prefs ADD COLUMN sound INTEGER DEFAULT 1")
+            except Exception:
+                pass
+            cur.execute(
+                "INSERT INTO user_prefs(chat_id, user_id, tz, updated_at_utc, lang, sound) VALUES (?, ?, ?, ?, COALESCE((SELECT lang FROM user_prefs WHERE chat_id=? AND user_id=?),'ru'), ?) "
+                "ON CONFLICT(chat_id, user_id) DO UPDATE SET sound=excluded.sound, updated_at_utc=excluded.updated_at_utc",
+                (chat_id, user_id, DEFAULT_TZ, now_utc().isoformat(), chat_id, user_id, 1 if on else 0),
+            )
+            self.conn.commit()
+        await asyncio.to_thread(_op)
+
 
 # =============================
 # Планировщик (APScheduler)
@@ -717,13 +761,62 @@ class ReminderScheduler:
                     lang = await self.db.get_user_lang(chat_id, user_id) or DEFAULT_LANG
             except Exception:
                 pass
-            await self.app.bot.send_message(chat_id=chat_id, text=text, reply_markup=inline_snooze_menu(lang, reminder_id))
+            # Учитываем пользовательский звук
+            row = await self.db.get_by_id(reminder_id)
+            disable = False
+            try:
+                if row:
+                    disable = not (await self.db.get_user_sound(chat_id, int(row["user_id"])))
+            except Exception:
+                pass
+            await self.app.bot.send_message(chat_id=chat_id, text=text, reply_markup=inline_snooze_menu(lang, reminder_id), disable_notification=disable)
         except Exception:
             logger.exception("Не удалось отправить сообщение для reminder_id=%s", reminder_id)
+        # Не помечаем как sent — будем повторять пока пользователь не отметит "прочитано"/snooze
         try:
-            await self.db.mark_sent(reminder_id)
+            # Запускаем повторную доставку через 5 минут, если статус не изменится
+            self.scheduler.add_job(
+                self._repeat_check,
+                trigger=DateTrigger(run_date=now_utc() + timedelta(minutes=5)),
+                kwargs={"reminder_id": reminder_id, "chat_id": chat_id, "text": text},
+                id=f"repeat:{reminder_id}:{int(datetime.now().timestamp())}",
+                coalesce=True,
+                misfire_grace_time=600,
+            )
         except Exception:
-            logger.exception("Не удалось отметить как отправлен reminder_id=%s", reminder_id)
+            logger.exception("Не удалось запланировать повтор reminder_id=%s", reminder_id)
+
+    async def _repeat_check(self, reminder_id: int, chat_id: int, text: str) -> None:
+        try:
+            row = await self.db.get_by_id(reminder_id)
+            if not row or row["status"] != "scheduled":
+                return
+            # Повторная отправка
+            lang = DEFAULT_LANG
+            try:
+                if row:
+                    user_id = int(row["user_id"])
+                    lang = await self.db.get_user_lang(chat_id, user_id) or DEFAULT_LANG
+            except Exception:
+                pass
+            disable = False
+            try:
+                if row:
+                    disable = not (await self.db.get_user_sound(chat_id, int(row["user_id"])))
+            except Exception:
+                pass
+            await self.app.bot.send_message(chat_id=chat_id, text=text, reply_markup=inline_snooze_menu(lang, reminder_id), disable_notification=disable)
+            # Планируем следующий повтор через 5 минут
+            self.scheduler.add_job(
+                self._repeat_check,
+                trigger=DateTrigger(run_date=now_utc() + timedelta(minutes=5)),
+                kwargs={"reminder_id": reminder_id, "chat_id": chat_id, "text": text},
+                id=f"repeat:{reminder_id}:{int(datetime.now().timestamp())}",
+                coalesce=True,
+                misfire_grace_time=600,
+            )
+        except Exception:
+            logger.exception("Ошибка повторной доставки reminder_id=%s", reminder_id)
 
 
 # =============================
@@ -1068,10 +1161,14 @@ class BotHandlers:
         msg = update.effective_message
         try:
             # Безопасность: разрешим только владельцу чата (личка) или пользователю-админу по env
-            admin_id = os.getenv("REMIND_ADMIN_ID")
-            if admin_id and str(update.effective_user.id) != str(admin_id):
-                await msg.reply_text("Недостаточно прав.")
-                return
+            admin_raw = os.getenv("REMIND_ADMIN_ID")
+            if admin_raw:
+                allowed = [a.strip().lower() for a in admin_raw.split(",") if a.strip()]
+                uid = str(update.effective_user.id)
+                uname = ("@" + (update.effective_user.username or "")).lower()
+                if uid.lower() not in allowed and uname not in allowed:
+                    await msg.reply_text("Недостаточно прав.")
+                    return
             # Остановим планировщик
             self.sched.shutdown()
             # Удалим БД
@@ -1277,6 +1374,13 @@ def build_application() -> Application:
             if data == "open:tz":
                 await q.edit_message_text(t(lang, "choose_tz"), reply_markup=inline_tz_menu(lang))
                 return
+            if data == "open:sound":
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton(text=t(lang, "sound_on"), callback_data="sound:set:1"), InlineKeyboardButton(text=t(lang, "sound_off"), callback_data="sound:set:0")],
+                    [InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="back")],
+                ])
+                await q.edit_message_text(t(lang, "choose_sound"), reply_markup=kb)
+                return
             if data == "open:at":
                 await q.edit_message_text(t(lang, "choose_at_date"), reply_markup=inline_dates_menu(lang))
                 return
@@ -1320,6 +1424,11 @@ def build_application() -> Application:
                 else:
                     await q.edit_message_text(t(lang, "tz_bad"), reply_markup=inline_main_menu(lang))
                 return
+            if data.startswith("sound:set:"):
+                on = data.endswith(":1")
+                await handlers.db.set_user_sound(chat_id, user_id, on)
+                await q.edit_message_text(t(lang, "choose_sound"), reply_markup=inline_main_menu(lang))
+                return
             if data.startswith("watch:"):
                 rid = int(data.split(":", 1)[1])
                 await handlers._watch_id(chat_id, user_id, rid, q.message, lang)  # type: ignore
@@ -1327,6 +1436,15 @@ def build_application() -> Application:
             if data.startswith("cancel:"):
                 rid = int(data.split(":", 1)[1])
                 await handlers._cancel_id(chat_id, user_id, rid, q.message, lang)  # type: ignore
+                return
+            if data.startswith("done:"):
+                rid = int(data.split(":", 1)[1])
+                # Помечаем как sent (прочитано) и снимаем повторения
+                try:
+                    await handlers.db.mark_sent(rid)
+                except Exception:
+                    pass
+                await q.edit_message_reply_markup(reply_markup=None)
                 return
             if data.startswith("snooze_do:"):
                 _, rid, mins = data.split(":", 2)
