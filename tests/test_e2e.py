@@ -3,11 +3,28 @@ import time
 import unittest
 from datetime import datetime
 
+"""Load local .env.e2e if present to populate env for E2E tests."""
+env_path = os.path.join(os.path.dirname(__file__), "..", ".env.e2e")
+env_path = os.path.abspath(env_path)
+if os.path.exists(env_path):
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                if key:
+                    os.environ[key] = value
+    except Exception:
+        pass
+
 E2E_ENABLED = os.getenv("E2E_TELEGRAM") == "1"
 try:
     from telethon import TelegramClient
     from telethon.sessions import StringSession
-    from telethon.errors.rpcerrorlist import PhoneCodeRequiredError
 except Exception:  # pragma: no cover
     TelegramClient = None  # type: ignore
 
@@ -24,12 +41,18 @@ class E2ETests(unittest.TestCase):
             raise unittest.SkipTest("E2E env vars missing: E2E_API_ID/E2E_API_HASH/E2E_PHONE")
         if session:
             cls.client = TelegramClient(StringSession(session), int(api_id), api_hash)
+            cls.client.start()
         else:
             cls.client = TelegramClient("e2e_session", int(api_id), api_hash)
-        cls.client.start(phone=phone)
-        cls.bot_username = os.getenv("E2E_BOT_USERNAME")  # e.g., belialreminderbot
-        if not cls.bot_username:
-            raise unittest.SkipTest("E2E_BOT_USERNAME missing")
+            cls.client.start(phone=phone)
+        # Ensure session is a USER, not a bot
+        try:
+            me = cls.client.loop.run_until_complete(cls.client.get_me())
+            if getattr(me, "bot", False):
+                raise unittest.SkipTest("E2E requires a USER session, got a BOT session. Regenerate StringSession with a phone login.")
+        except Exception:
+            pass
+        cls.bot_username = os.getenv("E2E_BOT_USERNAME") or "PingMeMemo_Bot"
 
     @classmethod
     def tearDownClass(cls):

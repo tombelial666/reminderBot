@@ -1,0 +1,4 @@
+{
+  "description": "Запустить контейнер бота",
+  "run": "bash -lc 'cd /Users/user/repoMac/bot && docker compose up -d bot | cat'"
+}

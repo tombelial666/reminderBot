@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import json
 import os
 import signal
 import sqlite3
@@ -39,6 +40,7 @@ if not BOT_TOKEN:
 DEFAULT_TZ = os.getenv("REMIND_BOT_TZ", "Asia/Bangkok")
 DEFAULT_LANG = os.getenv("REMIND_BOT_LANG", "ru").lower()
 DB_PATH = os.getenv("REMIND_DB_PATH", "reminders.db")
+AUDIT_LOG_PATH = os.getenv("REMIND_AUDIT_LOG_PATH", "/data/audit.log")
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -46,6 +48,16 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger("reminder-bot")
+audit_logger = logging.getLogger("audit")
+
+try:
+    _fh = logging.FileHandler(AUDIT_LOG_PATH, encoding="utf-8")
+    _fh.setLevel(logging.INFO)
+    _fh.setFormatter(logging.Formatter("%(message)s"))
+    audit_logger.addHandler(_fh)
+    audit_logger.setLevel(logging.INFO)
+except Exception:
+    logger.exception("Не удалось инициализировать audit лог по пути %s", AUDIT_LOG_PATH)
 
 # externalized i18n and keyboards
 from i18n import t, set_bundles
@@ -116,7 +128,9 @@ _BUNDLES: Dict[str, Dict[str, str]] = {
         "lang_bad": "Поддерживаются только: ru, th, en",
         "lang_ok": "Язык установлен: {lang}",
         "error": "Произошла внутренняя ошибка. Попробуйте позже.",
-        "late_prefix": "(Поздно) "
+        "late_prefix": "(Отложенное сообщение в результате обновления бота. Приносим свои извинения за технические) "
+        ,"hint_at": "(чч:мм)"
+        ,"hint_in": "(мин)"
         ,"btn_insert_in": "Вставить /in"
         ,"btn_insert_at": "Вставить /at"
         ,"btn_insert_snooze": "Вставить /snooze"
@@ -128,12 +142,14 @@ _BUNDLES: Dict[str, Dict[str, str]] = {
         ,"btn_back": "Назад"
         ,"btn_tools": "Инструменты"
         ,"btn_sound": "Звук"
+        ,"btn_melody": "Мелодия"
         ,"choose_action": "Выберите действие:"
         ,"choose_watch": "Выберите напоминание для наблюдения:"
         ,"choose_cancel": "Выберите напоминание для отмены:"
         ,"choose_lang": "Выберите язык:"
         ,"choose_tz": "Выберите часовой пояс:"
         ,"choose_sound": "Выберите режим звука уведомлений:"
+        ,"choose_melody": "Выберите мелодию уведомления:"
         ,"sound_on": "🔔 Со звуком"
         ,"sound_off": "🔕 Без звука"
         ,"choose_at_hour": "Выберите час (0–23):"
@@ -146,6 +162,14 @@ _BUNDLES: Dict[str, Dict[str, str]] = {
         ,"snooze_15": "+15м"
         ,"snooze_30": "+30м"
         ,"snooze_60": "+60м"
+        ,"enter_city": "Введите свой город (на англ./рус./тай): например, Moscow, Москва, Bangkok, กรุงเทพฯ"
+        ,"enter_local_time": "Введите ваше локальное время в формате ЧЧ:ММ (например, 09:30)"
+        ,"btn_cancel_input": "Отмена"
+        ,"melody_default": "Стандартная"
+        ,"melody_bell": "Колокол"
+        ,"melody_chime": "Перезвон"
+        ,"melody_ding": "Дзынь"
+        ,"melody_saved": "Мелодия сохранена: {name}"
     },
     "th": {
         "help": (
@@ -186,7 +210,9 @@ _BUNDLES: Dict[str, Dict[str, str]] = {
         "lang_bad": "รองรับเฉพาะ: ru, th",
         "lang_ok": "ตั้งค่าภาษาเป็น {lang}",
         "error": "เกิดข้อผิดพลาดภายใน ลองใหม่ภายหลัง",
-        "late_prefix": "(ล่าช้า) "
+        "late_prefix": "(ข้อความล่าช้าจากการอัปเดตบอท ขออภัยในความไม่สะดวกทางเทคนิค) "
+        ,"hint_at": "(ชม:นาที)"
+        ,"hint_in": "(นาที)"
         ,"btn_insert_in": "แทรก /in"
         ,"btn_insert_at": "แทรก /at"
         ,"btn_insert_snooze": "แทรก /snooze"
@@ -198,12 +224,14 @@ _BUNDLES: Dict[str, Dict[str, str]] = {
         ,"btn_back": "กลับ"
         ,"btn_tools": "เครื่องมือ"
         ,"btn_sound": "เสียงแจ้งเตือน"
+        ,"btn_melody": "เสียงเรียกเข้า"
         ,"choose_action": "เลือกการทำงาน:"
         ,"choose_watch": "เลือกการเตือนเพื่อเฝ้าดู:"
         ,"choose_cancel": "เลือกการเตือนเพื่อยกเลิก:"
         ,"choose_lang": "เลือกภาษา:"
         ,"choose_tz": "เลือกโซนเวลา:"
         ,"choose_sound": "เลือกโหมดเสียงแจ้งเตือน:"
+        ,"choose_melody": "เลือกเสียงแจ้งเตือน:"
         ,"sound_on": "🔔 มีเสียง"
         ,"sound_off": "🔕 ไม่มีเสียง"
         ,"choose_at_hour": "เลือกชั่วโมง (0–23):"
@@ -216,6 +244,14 @@ _BUNDLES: Dict[str, Dict[str, str]] = {
         ,"snooze_15": "+15น"
         ,"snooze_30": "+30น"
         ,"snooze_60": "+60น"
+        ,"enter_city": "พิมพ์ชื่อเมืองของคุณ (EN/RU/TH): เช่น Bangkok, กรุงเทพฯ, Moscow"
+        ,"enter_local_time": "กรอกเวลาท้องถิ่นของคุณเป็น HH:MM (เช่น 09:30)"
+        ,"btn_cancel_input": "ยกเลิก"
+        ,"melody_default": "ค่าเริ่มต้น"
+        ,"melody_bell": "ระฆัง"
+        ,"melody_chime": "กระดิ่งหลายจังหวะ"
+        ,"melody_ding": "ติ๊ง"
+        ,"melody_saved": "บันทึกเสียงแล้ว: {name}"
     },
     "en": {
         "help": (
@@ -257,6 +293,8 @@ _BUNDLES: Dict[str, Dict[str, str]] = {
         "lang_ok": "Language set: {lang}",
         "error": "Internal error. Please try again later.",
         "late_prefix": "(Late) "
+        ,"hint_at": "(hh:mm)"
+        ,"hint_in": "(min)"
         ,"btn_insert_in": "Insert /in"
         ,"btn_insert_at": "Insert /at"
         ,"btn_insert_snooze": "Insert /snooze"
@@ -268,12 +306,14 @@ _BUNDLES: Dict[str, Dict[str, str]] = {
         ,"btn_back": "Back"
         ,"btn_tools": "Tools"
         ,"btn_sound": "Sound"
+        ,"btn_melody": "Melody"
         ,"choose_action": "Choose an action:"
         ,"choose_watch": "Choose a reminder to watch:"
         ,"choose_cancel": "Choose a reminder to cancel:"
         ,"choose_lang": "Choose language:"
         ,"choose_tz": "Choose timezone:"
         ,"choose_sound": "Choose notification sound:"
+        ,"choose_melody": "Choose notification melody:"
         ,"sound_on": "🔔 Sound on"
         ,"sound_off": "🔕 Silent"
         ,"choose_at_hour": "Choose hour (0–23):"
@@ -286,6 +326,14 @@ _BUNDLES: Dict[str, Dict[str, str]] = {
         ,"snooze_15": "+15m"
         ,"snooze_30": "+30m"
         ,"snooze_60": "+60m"
+        ,"enter_city": "Type your city (EN/RU/TH): e.g., London, Москва, กรุงเทพฯ"
+        ,"enter_local_time": "Enter your local time as HH:MM (e.g., 09:30)"
+        ,"btn_cancel_input": "Cancel"
+        ,"melody_default": "Default"
+        ,"melody_bell": "Bell"
+        ,"melody_chime": "Chime"
+        ,"melody_ding": "Ding"
+        ,"melody_saved": "Melody saved: {name}"
     },
 }
 
@@ -305,6 +353,24 @@ class ParsedAt:
 def get_tz(tz_name: str) -> timezone:
     if ZoneInfo is None:
         return timezone.utc
+    # Поддержка фиксированных зон вида UTC±HH:MM
+    try:
+        if tz_name.upper().startswith("UTC") and (len(tz_name) >= 4):
+            sign = 1
+            rest = tz_name[3:]
+            if rest and rest[0] in "+-":
+                if rest[0] == '-':
+                    sign = -1
+                rest = rest[1:]
+            hh, mm = 0, 0
+            if rest:
+                parts = rest.split(":")
+                hh = int(parts[0]) if parts[0] else 0
+                if len(parts) > 1:
+                    mm = int(parts[1])
+            return timezone(timedelta(hours=sign*hh, minutes=sign*mm))
+    except Exception:
+        pass
     try:
         return ZoneInfo(tz_name)
     except Exception:
@@ -314,14 +380,21 @@ def get_tz(tz_name: str) -> timezone:
 
 def is_valid_tz(tz_name: str) -> bool:
     try:
-        _ = get_tz(tz_name)
         if ZoneInfo is None:
             return tz_name.lower() in ("utc", "gmt")
-        try:
-            ZoneInfo(tz_name)
-            return True
-        except Exception:
-            return False
+        if tz_name.upper().startswith("UTC"):
+            # Быстрая проверка синтаксиса UTC±HH[:MM]
+            rest = tz_name[3:]
+            if rest and rest[0] in "+-":
+                rest = rest[1:]
+            if not rest:
+                return True
+            parts = rest.split(":")
+            hh = int(parts[0]) if parts[0] else 0
+            mm = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+            return 0 <= hh <= 14 and 0 <= mm < 60
+        ZoneInfo(tz_name)
+        return True
     except Exception:
         return False
 
@@ -338,6 +411,81 @@ def clamp_future(dt: datetime) -> Optional[datetime]:
     if dt < now_utc():
         return None
     return dt
+
+
+def audit_event(chat_id: int, user_id: int, action: str, **fields: object) -> None:
+    try:
+        # ленивое подключение файла, если логгер ещё без хендлеров (например, файл создали позже)
+        if not audit_logger.handlers:
+            try:
+                fh = logging.FileHandler(AUDIT_LOG_PATH, encoding="utf-8")
+                fh.setLevel(logging.INFO)
+                fh.setFormatter(logging.Formatter("%(message)s"))
+                audit_logger.addHandler(fh)
+                audit_logger.setLevel(logging.INFO)
+            except Exception:
+                # не блокируем основную логику
+                pass
+        payload = {
+            "ts": now_utc().isoformat(),
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "action": action,
+        }
+        if fields:
+            payload.update(fields)
+        audit_logger.info(json.dumps(payload, ensure_ascii=False))
+    except Exception:
+        # не мешаем основной логике
+        pass
+
+
+# =============================
+# Навигация (утилиты)
+# =============================
+
+def apply_back_navigation(nav_stack: List[str], user_data: Dict[str, object]) -> str:
+    """Выполнить шаг назад в стеке навигации и зачистить pending-состояния.
+    Возвращает новое текущее состояние (или 'main').
+    """
+    if not isinstance(nav_stack, list):
+        nav_stack = []
+    if not nav_stack:
+        nav_stack.append("main")
+    popped = nav_stack.pop() if nav_stack else "main"
+    prev = nav_stack[-1] if nav_stack else "main"
+    # Очистка pending, если выходим из экранов ожидания текста
+    if prev == "at_minute" or popped in ("at_minute", "at_await"):
+        user_data.pop("pending_at_hhmm", None)
+    if prev == "in_minute" or popped in ("in_minute", "in_await"):
+        user_data.pop("pending_in_min", None)
+    if popped in ("tz_time", "tz_city"):
+        user_data.pop("pending_tz_time", None)
+        user_data.pop("pending_tz_city", None)
+    return prev
+
+
+def _derive_utc_offset_from_local_hhmm(hh: int, mm: int) -> str:
+    """Вычислить строку UTC±HH:MM исходя из текущего UTC и введённого локального HH:MM.
+    Ограничиваем смещение диапазоном ±14:00.
+    """
+    now_utc_dt = now_utc()
+    entered_utc_same_day = now_utc_dt.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    candidates = [
+        (entered_utc_same_day - now_utc_dt),
+        (entered_utc_same_day + timedelta(days=1) - now_utc_dt),
+        (entered_utc_same_day - timedelta(days=1) - now_utc_dt),
+    ]
+    best = min(candidates, key=lambda d: abs(d.total_seconds()))
+    offset_minutes = int(round(best.total_seconds() / 60))
+    if offset_minutes < -14 * 60:
+        offset_minutes = -14 * 60
+    if offset_minutes > 14 * 60:
+        offset_minutes = 14 * 60
+    sign = "+" if offset_minutes >= 0 else "-"
+    m = abs(offset_minutes)
+    off_h, off_m = divmod(m, 60)
+    return f"UTC{sign}{off_h:02d}:{off_m:02d}"
 
 
 def _split_delta(delta: timedelta) -> Tuple[int, int, int, int]:
@@ -532,6 +680,80 @@ def parse_at_datetime(text: str, tz: timezone) -> Optional[ParsedAt]:
 
 
 # =============================
+# Город → Часовой пояс
+# =============================
+
+def tz_from_city(city_text: str) -> Optional[str]:
+    if not city_text:
+        return None
+    s = city_text.strip().lower()
+    # Нормализация дефисов/пробелов
+    s = s.replace("—", "-").replace("–", "-")
+    s = s.replace("_", " ")
+    s = " ".join(s.split())
+
+    # 1) Сначала попытка прямого имени TZ
+    if is_valid_tz(city_text):
+        return city_text
+
+    # 2) Попытка определить таймзону по базе geonamescache + timezonefinder (офлайн)
+    try:
+        from geonamescache import GeonamesCache
+        from timezonefinder import TimezoneFinder
+        gc = GeonamesCache()
+        cities = gc.get_cities()
+        # Синонимы (RU/TH → EN)
+        synonyms: Dict[str, str] = {
+            "москва": "moscow",
+            "санкт-петербург": "saint petersburg",
+            "питер": "saint petersburg",
+            "лондон": "london",
+            "берлин": "berlin",
+            "варшава": "warsaw",
+            "прага": "prague",
+            "бангкок": "bangkok",
+            "กรุงเทพ": "bangkok",
+            "กรุงเทพฯ": "bangkok",
+        }
+        s_norm = synonyms.get(s, s)
+        # поищем точное совпадение по нескольким полям (name, ascii, alternatenames)
+        candidates = []
+        for cid, c in cities.items():
+            names = [
+                (c.get("name") or ""),
+                (c.get("asciiname") or ""),
+            ] + (c.get("alternatenames") or [])
+            norm = [str(x).strip().lower() for x in names if x]
+            if s_norm in norm:
+                candidates.append(c)
+        if not candidates:
+            # частичное совпадение стартом строки
+            for cid, c in cities.items():
+                names = [
+                    (c.get("name") or ""),
+                    (c.get("asciiname") or ""),
+                ] + (c.get("alternatenames") or [])
+                for nm in names:
+                    if nm and str(nm).strip().lower().startswith(s_norm):
+                        candidates.append(c)
+                        break
+        if candidates:
+            # предпочтение по населению
+            candidates.sort(key=lambda x: int(str(x.get("population") or "0") or 0), reverse=True)
+            c = candidates[0]
+            lat = float(c.get("latitude"))
+            lon = float(c.get("longitude"))
+            tf = TimezoneFinder()
+            tz_name = tf.timezone_at(lng=lon, lat=lat)
+            if tz_name and is_valid_tz(tz_name):
+                return tz_name
+    except Exception:
+        pass
+
+    return None
+
+
+# =============================
 # Слой БД (sqlite)
 # =============================
 
@@ -576,6 +798,15 @@ class ReminderDB:
         # Миграция: добавить колонку lang, если её нет
         try:
             cur.execute("ALTER TABLE user_prefs ADD COLUMN lang TEXT DEFAULT 'ru'")
+        except Exception:
+            pass
+        # Миграции для новых предпочтений
+        try:
+            cur.execute("ALTER TABLE user_prefs ADD COLUMN sound INTEGER DEFAULT 1")
+        except Exception:
+            pass
+        try:
+            cur.execute("ALTER TABLE user_prefs ADD COLUMN melody TEXT DEFAULT 'default'")
         except Exception:
             pass
         self.conn.commit()
@@ -696,14 +927,34 @@ class ReminderDB:
     async def set_user_sound(self, chat_id: int, user_id: int, on: bool) -> None:
         def _op() -> None:
             cur = self.conn.cursor()
-            try:
-                cur.execute("ALTER TABLE user_prefs ADD COLUMN sound INTEGER DEFAULT 1")
-            except Exception:
-                pass
             cur.execute(
                 "INSERT INTO user_prefs(chat_id, user_id, tz, updated_at_utc, lang, sound) VALUES (?, ?, ?, ?, COALESCE((SELECT lang FROM user_prefs WHERE chat_id=? AND user_id=?),'ru'), ?) "
                 "ON CONFLICT(chat_id, user_id) DO UPDATE SET sound=excluded.sound, updated_at_utc=excluded.updated_at_utc",
                 (chat_id, user_id, DEFAULT_TZ, now_utc().isoformat(), chat_id, user_id, 1 if on else 0),
+            )
+            self.conn.commit()
+        await asyncio.to_thread(_op)
+
+    async def get_user_melody(self, chat_id: int, user_id: int) -> str:
+        def _op() -> str:
+            cur = self.conn.cursor()
+            try:
+                cur.execute("SELECT melody FROM user_prefs WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+                row = cur.fetchone()
+                if not row:
+                    return "default"
+                return row["melody"] if isinstance(row, sqlite3.Row) else (row[0] or "default")
+            except Exception:
+                return "default"
+        return await asyncio.to_thread(_op)
+
+    async def set_user_melody(self, chat_id: int, user_id: int, melody: str) -> None:
+        def _op() -> None:
+            cur = self.conn.cursor()
+            cur.execute(
+                "INSERT INTO user_prefs(chat_id, user_id, tz, updated_at_utc, lang, sound, melody) VALUES (?, ?, ?, ?, COALESCE((SELECT lang FROM user_prefs WHERE chat_id=? AND user_id=?),'ru'), COALESCE((SELECT sound FROM user_prefs WHERE chat_id=? AND user_id=?),1), ?) "
+                "ON CONFLICT(chat_id, user_id) DO UPDATE SET melody=excluded.melody, updated_at_utc=excluded.updated_at_utc",
+                (chat_id, user_id, DEFAULT_TZ, now_utc().isoformat(), chat_id, user_id, chat_id, user_id, melody),
             )
             self.conn.commit()
         await asyncio.to_thread(_op)
@@ -845,6 +1096,7 @@ class BotHandlers:
         try:
             chat_id = update.effective_chat.id
             user_id = update.effective_user.id
+            audit_event(chat_id, user_id, "cmd:/start")
             tz_name, _ = await self._get_user_tz(chat_id, user_id)
             lang = await self._get_user_lang(chat_id, user_id)
             msg = t(lang, "help", tz=tz_name, lang=lang, def_lang=self.default_lang)
@@ -864,17 +1116,24 @@ class BotHandlers:
         user_id = update.effective_user.id
         arg = None
         if context.args:
-            arg = " ".join(context.args).strip().lower()
+            raw = " ".join(context.args).strip()
+            # Если аргумент — только эмодзи/символы, считаем, что аргумента нет (нажатие кнопки с эмодзи)
+            import re
+            if re.search(r"[A-Za-zА-Яа-яёЁก-๙]", raw):
+                arg = raw.lower()
         try:
             current = await self._get_user_lang(chat_id, user_id)
             if not arg:
                 # Показать выпадающий список выбора языка
+                audit_event(chat_id, user_id, "cmd:/lang", mode="menu")
                 await msg.reply_text(t(current, "choose_lang"), reply_markup=inline_lang_menu(current))
                 return
             if arg not in {"ru", "th", "en"}:
+                audit_event(chat_id, user_id, "cmd:/lang", invalid=arg)
                 await msg.reply_text(t(current, "lang_bad"), reply_markup=inline_lang_menu(current))
                 return
             await self.db.set_user_lang(chat_id, user_id, arg)
+            audit_event(chat_id, user_id, "set:lang", lang=arg)
             await msg.reply_text(t(arg, "lang_ok", lang=arg), reply_markup=inline_lang_menu(arg))
         except Exception:
             logger.exception("Ошибка в /lang")
@@ -886,18 +1145,41 @@ class BotHandlers:
         user_id = update.effective_user.id
         arg = None
         if context.args:
-            arg = " ".join(context.args).strip()
+            raw = " ".join(context.args).strip()
+            # Если аргумент — только эмодзи/символы, считаем, что аргумента нет (нажатие кнопки с эмодзи)
+            import re
+            if re.fullmatch(r"\d{1,2}:\d{2}", raw) or re.search(r"[A-Za-zА-Яа-яёЁก-๙/]+", raw):
+                arg = raw
         try:
             lang = await self._get_user_lang(chat_id, user_id)
             if not arg:
-                # Показать выпадающий список часовых поясов
-                await msg.reply_text(t(lang, "choose_tz"), reply_markup=inline_tz_menu(lang))
+                # Просим ввести локальное время HH:MM
+                context.user_data["pending_tz_time"] = True
+                audit_event(chat_id, user_id, "cmd:/tz", mode="await_time")
+                await msg.reply_text(t(lang, "enter_local_time"))
                 return
-            candidate = arg
-            if not is_valid_tz(candidate):
+            # Если передан формат HH:MM — рассчитать UTC смещение и сохранить как UTC±HH:MM
+            import re
+            if re.fullmatch(r"\d{1,2}:\d{2}", arg):
+                try:
+                    hh, mm = [int(x) for x in arg.split(":", 1)]
+                    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                        raise ValueError
+                except Exception:
+                    await msg.reply_text(t(lang, "enter_local_time"))
+                    return
+                tz_fixed = _derive_utc_offset_from_local_hhmm(hh, mm)
+                await self.db.set_user_tz(chat_id, user_id, tz_fixed)
+                audit_event(chat_id, user_id, "set:tz_offset", tz=tz_fixed)
+                await msg.reply_text(t(lang, "tz_ok", tz=tz_fixed))
+                return
+            candidate = tz_from_city(arg)
+            if not candidate or not is_valid_tz(candidate):
+                audit_event(chat_id, user_id, "cmd:/tz", invalid=arg)
                 await msg.reply_text(t(lang, "tz_bad"))
                 return
             await self.db.set_user_tz(chat_id, user_id, candidate)
+            audit_event(chat_id, user_id, "set:tz", tz=candidate)
             await msg.reply_text(t(lang, "tz_ok", tz=candidate))
         except Exception:
             logger.exception("Ошибка в /tz")
@@ -910,6 +1192,7 @@ class BotHandlers:
         try:
             lang = await self._get_user_lang(chat_id, user_id)
             webapp_url = os.getenv("REMIND_WEBAPP_URL")
+            audit_event(chat_id, user_id, "cmd:/menu")
             await msg.reply_text(t(lang, "choose_action"), reply_markup=inline_main_menu(lang, webapp_url))
         except Exception:
             logger.exception("Ошибка в /menu")
@@ -918,12 +1201,19 @@ class BotHandlers:
         msg = update.effective_message
         chat_id = update.effective_chat.id
         user_id = update.effective_user.id
-        args_text = (msg.text or "").split(maxsplit=1)
+        # Обрезаем возможные завершающие эмодзи в кнопке
+        raw = (msg.text or "")
+        raw = raw.split(" ⏰")[0].split(" ⌛")[0]
+        args_text = raw.split(maxsplit=1)
         text_tail = args_text[1] if len(args_text) > 1 else ""
         try:
             lang = await self._get_user_lang(chat_id, user_id)
-            # Если нажата кнопка "/in (min)" из обычной клавиатуры — откроем список минут
-            if text_tail.strip().lower() == "(min)":
+            # Если нажата кнопка "/in (<лок.хинт>)" — откроем список минут
+            tail = text_tail.strip().lower()
+            hint_in_local = (t(lang, "hint_in") or "").lower()
+            triggers_in = {"(min)", hint_in_local, "hint_in"}
+            if (not tail) or (tail in triggers_in) or ("hint" in tail) or ("(" in tail and ")" in tail and not any(ch.isdigit() for ch in tail)):
+                audit_event(chat_id, user_id, "flow:in", step="choose_min")
                 await msg.reply_text(t(lang, "choose_in_min"), reply_markup=inline_minutes_menu_for_in(lang))
                 return
             tz_name, tz = await self._get_user_tz(chat_id, user_id)
@@ -940,6 +1230,7 @@ class BotHandlers:
                 await msg.reply_text(t(lang, "time_passed"))
                 return
             reminder_id = await self.db.add_reminder(chat_id, user_id, remainder, when_utc, tz_name)
+            audit_event(chat_id, user_id, "create:reminder_in", rid=reminder_id, minutes=int(delta.total_seconds()//60))
             self.sched.schedule_reminder(reminder_id, chat_id, remainder, when_utc)
             await msg.reply_text(
                 t(lang, "in_ok", delta=format_timedelta_brief_localized(lang, delta), when_local=when_local.strftime('%Y-%m-%d %H:%M'), tz=tz_name, rid=reminder_id)
@@ -952,12 +1243,18 @@ class BotHandlers:
         msg = update.effective_message
         chat_id = update.effective_chat.id
         user_id = update.effective_user.id
-        args_text = (msg.text or "").split(maxsplit=1)
+        raw = (msg.text or "")
+        raw = raw.split(" ⏰")[0].split(" ⌛")[0]
+        args_text = raw.split(maxsplit=1)
         text_tail = args_text[1] if len(args_text) > 1 else ""
         try:
             lang = await self._get_user_lang(chat_id, user_id)
-            # Если нажата кнопка "/at (hh:mm)" из обычной клавиатуры — откроем выбор даты/времени
-            if text_tail.strip().lower() == "(hh:mm)":
+            # Если нажата кнопка "/at (<лок.хинт>)" — откроем выбор даты/времени
+            tail = text_tail.strip().lower()
+            hint_at_local = (t(lang, "hint_at") or "").lower()
+            triggers_at = {"(hh:mm)", hint_at_local, "hint_at"}
+            if (not tail) or (tail in triggers_at) or ("hint" in tail) or ("(" in tail and ")" in tail and not any(ch.isdigit() for ch in tail)):
+                audit_event(chat_id, user_id, "flow:at", step="choose_date")
                 await msg.reply_text(t(lang, "choose_at_date"), reply_markup=inline_dates_menu(lang))
                 return
             if not text_tail:
@@ -984,6 +1281,7 @@ class BotHandlers:
                 await msg.reply_text(t(lang, "at_past"))
                 return
             reminder_id = await self.db.add_reminder(chat_id, user_id, reminder_text, when_utc, tz_name)
+            audit_event(chat_id, user_id, "create:reminder_at", rid=reminder_id)
             self.sched.schedule_reminder(reminder_id, chat_id, reminder_text, when_utc)
             delta = when_utc - now_utc()
             await msg.reply_text(
@@ -1010,6 +1308,7 @@ class BotHandlers:
                 when_local = when_utc.astimezone(tz)
                 delta = when_utc - now_utc()
                 lines.append(f"ID {r['id']}: {when_local.strftime('%Y-%m-%d %H:%M')} ({tz_name}) — {format_timedelta_brief_localized(lang, delta)} — {r['text']}")
+            audit_event(chat_id, user_id, "cmd:/list", count=len(rows))
             await msg.reply_text("\n".join(lines), reply_markup=inline_rid_menu(lang, rows, action="watch"))
         except Exception:
             logger.exception("Ошибка в /list")
@@ -1030,6 +1329,7 @@ class BotHandlers:
             except ValueError:
                 await msg.reply_text(t(lang, "cancel_nan"))
                 return
+            audit_event(chat_id, user_id, "cmd:/cancel", rid=rid)
             await self._cancel_id(chat_id, user_id, rid, msg, lang)
         except Exception:
             logger.exception("Ошибка в /cancel")
@@ -1071,6 +1371,7 @@ class BotHandlers:
                 await msg.reply_text(t(lang, "cancel_not_found"))
                 return
             self.sched.schedule_reminder(rid, chat_id, row["text"], new_when_utc)
+            audit_event(chat_id, user_id, "cmd:/snooze", rid=rid)
             await msg.reply_text(
                 t(lang, "snooze_ok", when_local=new_when_local.strftime('%Y-%m-%d %H:%M'), tz=tz_name, delta=format_timedelta_brief_localized(lang, new_when_utc - now_utc()), rid=rid)
             )
@@ -1123,6 +1424,7 @@ class BotHandlers:
         delta = when_utc - now_utc()
         m = await msg.reply_text(f"⏳ ID {rid}: {when_local.strftime('%Y-%m-%d %H:%M')} ({tz_name}) — {format_timedelta_brief_localized(lang, delta)}")
         self.app.job_queue.run_repeating(self._tick, interval=60, first=60, data={"chat_id": chat_id, "message_id": m.message_id, "rid": rid, "lang": lang})
+        audit_event(chat_id, user_id, "watch:start", rid=rid)
 
     async def _cancel_id(self, chat_id: int, user_id: int, rid: int, msg, lang: str) -> None:
         ok = await self.db.cancel(rid, user_id)
@@ -1142,15 +1444,18 @@ class BotHandlers:
         args = (msg.text or "").split(maxsplit=1)
         try:
             lang = await self._get_user_lang(chat_id, user_id)
-            if len(args) < 2:
+            # Если нажатие с эмодзи из ReplyKeyboard (второй токен не цифра) — трактуем как отсутствие аргумента
+            if len(args) < 2 or not args[1].strip().isdigit():
                 # показать выбор активных напоминаний
                 rows = await self.db.get_active_for_user(chat_id, user_id, limit=20)
                 if not rows:
                     await msg.reply_text(t(lang, "list_empty"))
                     return
+                audit_event(chat_id, user_id, "cmd:/watch", mode="menu")
                 await msg.reply_text(t(lang, "choose_watch"), reply_markup=inline_rid_menu(lang, rows, action="watch"))
                 return
             rid = int(args[1].strip())
+            audit_event(chat_id, user_id, "cmd:/watch", rid=rid)
             await self._watch_id(chat_id, user_id, rid, msg, lang)
         except Exception:
             logger.exception("Ошибка в /watch")
@@ -1286,9 +1591,55 @@ def build_application() -> Application:
         user_id = update.effective_user.id
         try:
             lang = await handlers._get_user_lang(chat_id, user_id)
+            audit_event(chat_id, user_id, "text", text=(msg.text or "")[:200])
             pending_hhmm = context.user_data.get("pending_at_hhmm")
             pending_in = context.user_data.get("pending_in_min")
+            pending_tz = context.user_data.get("pending_tz_city")
+            pending_tz_time = context.user_data.get("pending_tz_time")
             text = (msg.text or "").strip()
+            if pending_tz:
+                # Пытаемся распознать город и установить TZ
+                context.user_data.pop("pending_tz_city", None)
+                candidate = tz_from_city(text)
+                if not candidate or not is_valid_tz(candidate):
+                    await msg.reply_text(t(lang, "tz_bad"))
+                    return
+                await handlers.db.set_user_tz(chat_id, user_id, candidate)
+                await msg.reply_text(t(lang, "tz_ok", tz=candidate))
+                return
+            if pending_tz_time:
+                context.user_data.pop("pending_tz_time", None)
+                try:
+                    hh, mm = [int(x) for x in text.split(":", 1)]
+                    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                        raise ValueError
+                except Exception:
+                    await msg.reply_text(t(lang, "enter_local_time"))
+                    return
+                # Вычислим смещение как разницу между введённым временем и текущим UTC в сутки
+                now_utc_dt = now_utc()
+                entered_utc_same_day = now_utc_dt.replace(hour=hh, minute=mm, second=0, microsecond=0)
+                # Рассмотрим три варианта смещения в пределах +-12 часов относительно UTC
+                candidates = [
+                    (entered_utc_same_day - now_utc_dt),
+                    (entered_utc_same_day + timedelta(days=1) - now_utc_dt),
+                    (entered_utc_same_day - timedelta(days=1) - now_utc_dt),
+                ]
+                # Нормализуем к диапазону +-12ч
+                best = min(candidates, key=lambda d: abs(d.total_seconds()))
+                offset_minutes = int(round(best.total_seconds() / 60))
+                # Ограничим смещение разумным диапазоном (-14:00..+14:00)
+                if offset_minutes < -14*60:
+                    offset_minutes = -14*60
+                if offset_minutes > 14*60:
+                    offset_minutes = 14*60
+                sign = "+" if offset_minutes >= 0 else "-"
+                m = abs(offset_minutes)
+                off_h, off_m = divmod(m, 60)
+                tz_fixed = f"UTC{sign}{off_h:02d}:{off_m:02d}"
+                await handlers.db.set_user_tz(chat_id, user_id, tz_fixed)
+                await msg.reply_text(t(lang, "tz_ok", tz=tz_fixed))
+                return
             if pending_hhmm:
                 # Используем выбранные час:мин и выбранную дату (если задана), иначе текущую дату пользователя
                 tz_name, tz = await handlers._get_user_tz(chat_id, user_id)
@@ -1338,80 +1689,237 @@ def build_application() -> Application:
         await q.answer()
         chat_id = q.message.chat.id  # type: ignore
         user_id = q.from_user.id  # type: ignore
+        try:
+            audit_event(chat_id, user_id, "cb", data=(q.data or ""))
+        except Exception:
+            pass
         lang = await handlers._get_user_lang(chat_id, user_id)
         data = q.data or ""
+        # Навигация: стек состояний для строгого Back
+        stack = context.user_data.get("nav_stack")
+        if not isinstance(stack, list):
+            stack = []
+        # Инициализируем корневое состояние, чтобы Back с первого уровня возвращал на main, а не скрывал инлайн
+        if not stack:
+            stack = ["main"]
+        def _save_stack() -> None:
+            context.user_data["nav_stack"] = stack
+        def _push(state: str) -> None:
+            if not stack:
+                stack.append("main")
+            if stack[-1] != state:
+                stack.append(state)
+            _save_stack()
+        def _pop() -> str:
+            if not stack:
+                return "main"
+            # Не даём удалить корень полностью — всегда оставляем хотя бы 'main'
+            if len(stack) == 1:
+                return stack[0]
+            state = stack.pop()
+            _save_stack()
+            return state
+        def _peek() -> str:
+            return stack[-1] if stack else "main"
+        def _back_kb() -> InlineKeyboardMarkup:
+            return InlineKeyboardMarkup([[InlineKeyboardButton(text=f"◀️ {t(lang, 'btn_back')}", callback_data="back")]])
+        def _await_kb() -> InlineKeyboardMarkup:
+            return InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(text=f"◀️ {t(lang, 'btn_back')}", callback_data="back"),
+                    InlineKeyboardButton(text=t(lang, 'btn_cancel_input'), callback_data="cancel_input"),
+                ]
+            ])
+        async def _render(state: str) -> None:
+            if state == "main":
+                await q.edit_message_text(t(lang, "choose_action"), reply_markup=inline_main_menu(lang, os.getenv("REMIND_WEBAPP_URL")))
+                return
+            if state == "watch_choose":
+                rows = await handlers.db.get_active_for_user(chat_id, user_id, limit=20)
+                if not rows:
+                    await q.edit_message_text(t(lang, "list_empty"), reply_markup=inline_main_menu(lang))
+                else:
+                    await q.edit_message_text(t(lang, "choose_watch"), reply_markup=inline_rid_menu(lang, rows, action="watch"))
+                return
+            if state == "cancel_choose":
+                rows = await handlers.db.get_active_for_user(chat_id, user_id, limit=20)
+                if not rows:
+                    await q.edit_message_text(t(lang, "list_empty"), reply_markup=inline_main_menu(lang))
+                else:
+                    await q.edit_message_text(t(lang, "choose_cancel"), reply_markup=inline_rid_menu(lang, rows, action="cancel"))
+                return
+            if state == "lang_choose":
+                await q.edit_message_text(t(lang, "choose_lang"), reply_markup=inline_lang_menu(lang))
+                return
+            if state == "tz_time":
+                await q.edit_message_text(t(lang, "enter_local_time"), reply_markup=_await_kb())
+                return
+            if state == "sound":
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton(text=t(lang, "sound_on"), callback_data="sound:set:1"), InlineKeyboardButton(text=t(lang, "sound_off"), callback_data="sound:set:0")],
+                    [InlineKeyboardButton(text=t(lang, "btn_melody"), callback_data="open:melody")],
+                    [InlineKeyboardButton(text=f"◀️ {t(lang, 'btn_back')}", callback_data="back")],
+                ])
+                await q.edit_message_text(t(lang, "choose_sound"), reply_markup=kb)
+                return
+            if state == "melody":
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton(text=t(lang, "melody_default"), callback_data="melody:set:default")],
+                    [InlineKeyboardButton(text=t(lang, "melody_bell"), callback_data="melody:set:bell")],
+                    [InlineKeyboardButton(text=t(lang, "melody_chime"), callback_data="melody:set:chime")],
+                    [InlineKeyboardButton(text=t(lang, "melody_ding"), callback_data="melody:set:ding")],
+                    [InlineKeyboardButton(text=f"◀️ {t(lang, 'btn_back')}", callback_data="back")],
+                ])
+                await q.edit_message_text(t(lang, "choose_melody"), reply_markup=kb)
+                return
+            if state == "at_date":
+                await q.edit_message_text(t(lang, "choose_at_date"), reply_markup=inline_dates_menu(lang))
+                return
+            if state == "at_hour":
+                await q.edit_message_text(t(lang, "choose_at_hour"), reply_markup=inline_hours_menu(lang))
+                return
+            if state == "at_minute":
+                hh = context.user_data.get("nav_at_hh") or "00"
+                await q.edit_message_text(t(lang, "choose_at_min"), reply_markup=inline_minutes_menu_for_at(lang, hh))
+                return
+            if state == "at_await":
+                await q.edit_message_text(t(lang, "enter_text"), reply_markup=_await_kb())
+                return
+            if state == "in_minute":
+                await q.edit_message_text(t(lang, "choose_in_min"), reply_markup=inline_minutes_menu_for_in(lang))
+                return
+            if state == "in_await":
+                await q.edit_message_text(t(lang, "enter_text"), reply_markup=_await_kb())
+                return
         try:
             if data == "back":
-                try:
-                    await q.edit_message_reply_markup(reply_markup=inline_main_menu(lang))
-                except Exception:
-                    pass
+                # Шаг назад согласно стеку
+                prev = apply_back_navigation(stack, context.user_data)
+                _save_stack()
+                if prev == "main":
+                    # На корне — скрыть инлайн-клавиатуру
+                    try:
+                        await q.edit_message_reply_markup(reply_markup=None)
+                    except Exception:
+                        pass
+                else:
+                    await _render(prev)
                 return
             if data == "list":
                 rows = await handlers.db.get_active_for_user(chat_id, user_id, limit=20)
                 if not rows:
                     await q.edit_message_text(t(lang, "list_empty"), reply_markup=inline_main_menu(lang))
                     return
+                audit_event(chat_id, user_id, "cb:list")
                 await q.edit_message_text(t(lang, "list_header", tz=(await handlers._get_user_tz(chat_id, user_id))[0]), reply_markup=inline_rid_menu(lang, rows, action="watch"))
+                _push("watch_choose")
                 return
             if data == "open:watch":
                 rows = await handlers.db.get_active_for_user(chat_id, user_id, limit=20)
                 if not rows:
                     await q.edit_message_text(t(lang, "list_empty"), reply_markup=inline_main_menu(lang))
                     return
+                audit_event(chat_id, user_id, "cb:open:watch")
                 await q.edit_message_text(t(lang, "choose_watch"), reply_markup=inline_rid_menu(lang, rows, action="watch"))
+                _push("watch_choose")
                 return
             if data == "open:cancel":
                 rows = await handlers.db.get_active_for_user(chat_id, user_id, limit=20)
                 if not rows:
                     await q.edit_message_text(t(lang, "list_empty"), reply_markup=inline_main_menu(lang))
                     return
+                audit_event(chat_id, user_id, "cb:open:cancel")
                 await q.edit_message_text(t(lang, "choose_cancel"), reply_markup=inline_rid_menu(lang, rows, action="cancel"))
+                _push("cancel_choose")
                 return
             if data == "open:lang":
+                audit_event(chat_id, user_id, "cb:open:lang")
                 await q.edit_message_text(t(lang, "choose_lang"), reply_markup=inline_lang_menu(lang))
+                _push("lang_choose")
                 return
             if data == "open:tz":
-                await q.edit_message_text(t(lang, "choose_tz"), reply_markup=inline_tz_menu(lang))
+                # Просим локальное время HH:MM (Cancel доступен)
+                context.user_data["pending_tz_time"] = True
+                audit_event(chat_id, user_id, "cb:open:tz")
+                await q.edit_message_text(t(lang, "enter_local_time"), reply_markup=_await_kb())
+                _push("tz_time")
                 return
             if data == "open:sound":
+                audit_event(chat_id, user_id, "cb:open:sound")
                 kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton(text=t(lang, "sound_on"), callback_data="sound:set:1"), InlineKeyboardButton(text=t(lang, "sound_off"), callback_data="sound:set:0")],
-                    [InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="back")],
+                    [InlineKeyboardButton(text=t(lang, "btn_melody"), callback_data="open:melody")],
+                    [InlineKeyboardButton(text=f"◀️ {t(lang, 'btn_back')}", callback_data="back")],
                 ])
                 await q.edit_message_text(t(lang, "choose_sound"), reply_markup=kb)
+                _push("sound")
+                return
+            if data == "open:melody":
+                audit_event(chat_id, user_id, "cb:open:melody")
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton(text=t(lang, "melody_default"), callback_data="melody:set:default")],
+                    [InlineKeyboardButton(text=t(lang, "melody_bell"), callback_data="melody:set:bell")],
+                    [InlineKeyboardButton(text=t(lang, "melody_chime"), callback_data="melody:set:chime")],
+                    [InlineKeyboardButton(text=t(lang, "melody_ding"), callback_data="melody:set:ding")],
+                    [InlineKeyboardButton(text=f"◀️ {t(lang, 'btn_back')}", callback_data="back")],
+                ])
+                await q.edit_message_text(t(lang, "choose_melody"), reply_markup=kb)
+                _push("melody")
                 return
             if data == "open:at":
+                audit_event(chat_id, user_id, "cb:open:at")
                 await q.edit_message_text(t(lang, "choose_at_date"), reply_markup=inline_dates_menu(lang))
+                _push("at_date")
                 return
             if data.startswith("at_date:"):
                 date_str = data.split(":", 1)[1]
                 context.user_data["pending_at_date"] = date_str
+                audit_event(chat_id, user_id, "cb:at_date", date=date_str)
                 await q.edit_message_text(t(lang, "choose_at_hour"), reply_markup=inline_hours_menu(lang))
+                _push("at_hour")
                 return
             if data == "open:in":
+                audit_event(chat_id, user_id, "cb:open:in")
                 await q.edit_message_text(t(lang, "choose_in_min"), reply_markup=inline_minutes_menu_for_in(lang))
+                _push("in_minute")
                 return
             if data.startswith("at_hh:"):
                 hh = data.split(":", 1)[1]
+                context.user_data["nav_at_hh"] = hh
+                audit_event(chat_id, user_id, "cb:at_hh", hh=hh)
                 await q.edit_message_text(t(lang, "choose_at_min"), reply_markup=inline_minutes_menu_for_at(lang, hh))
+                _push("at_minute")
                 return
             if data.startswith("at_set:"):
                 _, hh, mm = data.split(":", 2)
                 # Сохраним intention в user_data и попросим текст
                 context.user_data["pending_at_hhmm"] = f"{hh}:{mm}"
-                await q.edit_message_text(t(lang, "enter_text"))
+                audit_event(chat_id, user_id, "cb:at_set", hh=hh, mm=mm)
+                await q.edit_message_text(t(lang, "enter_text"), reply_markup=_await_kb())
+                _push("at_await")
                 return
             if data.startswith("in_set:"):
                 minutes = data.split(":", 1)[1]
                 context.user_data["pending_in_min"] = int(minutes)
-                await q.edit_message_text(t(lang, "enter_text"))
+                audit_event(chat_id, user_id, "cb:in_set", minutes=int(minutes))
+                await q.edit_message_text(t(lang, "enter_text"), reply_markup=_await_kb())
+                _push("in_await")
+                return
+            if data == "cancel_input":
+                # Сбросить все pending и вернуться в корневое меню
+                for key in ("pending_at_hhmm", "pending_in_min", "pending_tz_time", "pending_tz_city"):
+                    context.user_data.pop(key, None)
+                # Очистить стек и показать корневое меню
+                context.user_data["nav_stack"] = []
+                audit_event(chat_id, user_id, "cb:cancel_input")
+                await q.edit_message_text(t(lang, "choose_action"), reply_markup=inline_main_menu(lang, os.getenv("REMIND_WEBAPP_URL")))
                 return
             if data.startswith("lang:"):
                 new_lang = data.split(":", 1)[1]
                 if new_lang in {"ru", "th", "en"}:
                     await handlers.db.set_user_lang(chat_id, user_id, new_lang)
                     lang = new_lang
+                    audit_event(chat_id, user_id, "cb:lang", lang=lang)
                     await q.edit_message_text(t(lang, "lang_ok", lang=lang), reply_markup=inline_main_menu(lang))
                 else:
                     await q.edit_message_text(t(lang, "lang_bad"), reply_markup=inline_main_menu(lang))
@@ -1420,6 +1928,7 @@ def build_application() -> Application:
                 tz_name = data.split(":", 1)[1]
                 if is_valid_tz(tz_name):
                     await handlers.db.set_user_tz(chat_id, user_id, tz_name)
+                    audit_event(chat_id, user_id, "cb:tz", tz=tz_name)
                     await q.edit_message_text(t(lang, "tz_ok", tz=tz_name), reply_markup=inline_main_menu(lang))
                 else:
                     await q.edit_message_text(t(lang, "tz_bad"), reply_markup=inline_main_menu(lang))
@@ -1427,14 +1936,23 @@ def build_application() -> Application:
             if data.startswith("sound:set:"):
                 on = data.endswith(":1")
                 await handlers.db.set_user_sound(chat_id, user_id, on)
+                audit_event(chat_id, user_id, "cb:sound", on=on)
                 await q.edit_message_text(t(lang, "choose_sound"), reply_markup=inline_main_menu(lang))
+                return
+            if data.startswith("melody:set:"):
+                melody = data.split(":", 2)[2]
+                await handlers.db.set_user_melody(chat_id, user_id, melody)
+                audit_event(chat_id, user_id, "cb:melody", melody=melody)
+                await q.edit_message_text(t(lang, "melody_saved", name=t(lang, f"melody_{melody}") if f"melody_{melody}" in _BUNDLES.get(lang, {}) else melody), reply_markup=inline_main_menu(lang))
                 return
             if data.startswith("watch:"):
                 rid = int(data.split(":", 1)[1])
+                audit_event(chat_id, user_id, "cb:watch", rid=rid)
                 await handlers._watch_id(chat_id, user_id, rid, q.message, lang)  # type: ignore
                 return
             if data.startswith("cancel:"):
                 rid = int(data.split(":", 1)[1])
+                audit_event(chat_id, user_id, "cb:cancel", rid=rid)
                 await handlers._cancel_id(chat_id, user_id, rid, q.message, lang)  # type: ignore
                 return
             if data.startswith("done:"):
@@ -1444,6 +1962,7 @@ def build_application() -> Application:
                     await handlers.db.mark_sent(rid)
                 except Exception:
                     pass
+                audit_event(chat_id, user_id, "cb:done", rid=rid)
                 await q.edit_message_reply_markup(reply_markup=None)
                 return
             if data.startswith("snooze_do:"):
@@ -1460,6 +1979,7 @@ def build_application() -> Application:
                 ok = await handlers.db.update_due(rid, int(row["user_id"]), new_when_utc)
                 if ok:
                     handlers.sched.schedule_reminder(rid, chat_id, row["text"], new_when_utc)
+                    audit_event(chat_id, user_id, "cb:snooze", rid=rid, minutes=mins)
                     await q.edit_message_text(t(lang, "snooze_ok", when_local=new_when_local.strftime('%Y-%m-%d %H:%M'), tz=tz_name, delta=format_timedelta_brief_localized(lang, new_when_utc - now_utc()), rid=rid))
                 else:
                     await q.edit_message_text(t(lang, "cancel_not_found"))

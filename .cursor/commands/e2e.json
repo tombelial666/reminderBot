@@ -1,0 +1,4 @@
+{
+  "description": "Запуск E2E теста (нужен .env.e2e)",
+  "run": "bash -lc 'cd /Users/user/repoMac/bot && bash scripts/e2e_run.sh'"
+}

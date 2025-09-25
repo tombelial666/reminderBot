@@ -1,0 +1,4 @@
+{
+  "description": "Установить зависимости проекта (+pytest/telethon для dev)",
+  "run": "bash -lc 'cd /Users/user/repoMac/bot && if [ -f .venv/bin/activate ]; then . .venv/bin/activate; fi && pip install -r requirements.txt && pip install -q pytest telethon'"
+}

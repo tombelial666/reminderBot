@@ -1,0 +1,4 @@
+{
+  "description": "Собрать Docker-образ",
+  "run": "bash -lc 'cd /Users/user/repoMac/bot && docker compose build | cat'"
+}

@@ -1,3 +1,5 @@
 python-telegram-bot==21.4
 APScheduler==3.10.4
 dateparser==1.2.0
+geonamescache==2.0.0
+timezonefinder==4.5.0

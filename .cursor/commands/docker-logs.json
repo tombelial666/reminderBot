@@ -1,0 +1,4 @@
+{
+  "description": "Логи контейнера бота",
+  "run": "bash -lc 'docker logs --tail=100 -f remind-bot | cat'"
+}

@@ -12,7 +12,7 @@ class FakeBot:
     def __init__(self) -> None:
         self.sent = []  # tuples (chat_id, text)
 
-    async def send_message(self, chat_id: int, text: str):
+    async def send_message(self, chat_id: int, text: str, **kwargs):
         self.sent.append((chat_id, text))
 
 
@@ -26,7 +26,7 @@ class FakeMessage:
         self.text = text
         self.replies = []
 
-    async def reply_text(self, text: str):
+    async def reply_text(self, text: str, **kwargs):
         self.replies.append(text)
 
 
@@ -45,6 +45,7 @@ class FakeUpdate:
 class FakeContext:
     def __init__(self, args=None):
         self.args = args or []
+        self.user_data = {}
 
 
 # --------- Helpers ---------
@@ -114,18 +115,42 @@ class DBAndHandlersAsyncTests(unittest.IsolatedAsyncioTestCase):
             pass
 
     async def test_tz_show_and_set(self):
-        # show
+        # prompt local time (new behavior)
         upd = FakeUpdate(self.chat_id, self.user_id, "/tz")
         ctx = FakeContext()
         await self.handlers.cmd_tz(upd, ctx)
-        self.assertTrue(any("Текущий часовой пояс" in r for r in upd.effective_message.replies))
-        # set
+        prompt = "\n".join(upd.effective_message.replies)
+        self.assertTrue(("Введите ваше локальное время" in prompt) or ("Enter your local time" in prompt))
+        # set by full TZ name still works
         upd2 = FakeUpdate(self.chat_id, self.user_id, "/tz Europe/Berlin")
         ctx2 = FakeContext(["Europe/Berlin"])
         await self.handlers.cmd_tz(upd2, ctx2)
         self.assertIn("Europe/Berlin", "\n".join(upd2.effective_message.replies))
         tz = await self.db.get_user_tz(self.chat_id, self.user_id)
         self.assertEqual(tz, "Europe/Berlin")
+
+    async def test_tz_city_ru_th_en(self):
+        # RU city
+        upd_ru = FakeUpdate(self.chat_id, self.user_id, "/tz Москва")
+        await self.handlers.cmd_tz(upd_ru, FakeContext(["Москва"]))
+        self.assertIn("Europe/Moscow", "\n".join(upd_ru.effective_message.replies))
+        # EN city
+        upd_en = FakeUpdate(self.chat_id, self.user_id, "/tz Bangkok")
+        await self.handlers.cmd_tz(upd_en, FakeContext(["Bangkok"]))
+        self.assertIn("Asia/Bangkok", "\n".join(upd_en.effective_message.replies))
+        # TH city
+        upd_th = FakeUpdate(self.chat_id, self.user_id, "/tz กรุงเทพฯ")
+        await self.handlers.cmd_tz(upd_th, FakeContext(["กรุงเทพฯ"]))
+        self.assertIn("Asia/Bangkok", "\n".join(upd_th.effective_message.replies))
+
+    async def test_tz_command_with_time_input(self):
+        # prompt, then send time via arg
+        upd = FakeUpdate(self.chat_id, self.user_id, "/tz 09:30")
+        ctx = FakeContext(["09:30"])
+        await self.handlers.cmd_tz(upd, ctx)
+        out = "\n".join(upd.effective_message.replies)
+        # Must set UTC±HH:MM
+        self.assertRegex(out, r"UTC[+-]\d{2}:\d{2}")
 
     async def test_lang_set_en_th_and_help(self):
         handlers = self.handlers
@@ -189,6 +214,17 @@ class DBAndHandlersAsyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Активные напоминания", out)
         self.assertIn("TZ", out)
 
+    async def test_watch_from_reply_keyboard_without_id(self):
+        # prepare one reminder
+        upd = FakeUpdate(self.chat_id, self.user_id, "/in 1m watchme")
+        await self.handlers.cmd_in(upd, FakeContext())
+        # press reply keyboard /watch with emoji suffix
+        upd2 = FakeUpdate(self.chat_id, self.user_id, "/watch ⏱️")
+        await self.handlers.cmd_watch(upd2, FakeContext())
+        out = "\n".join(upd2.effective_message.replies)
+        # should show choose_watch text
+        self.assertTrue(("Выберите" in out) or ("Choose" in out))
+
     async def test_cancel(self):
         upd = FakeUpdate(self.chat_id, self.user_id, "/in 1m cancelme")
         await self.handlers.cmd_in(upd, FakeContext())
@@ -211,8 +247,9 @@ class DBAndHandlersAsyncTests(unittest.IsolatedAsyncioTestCase):
         rid2 = await self.db.add_reminder(self.chat_id, self.user_id, "future", fut_utc, "Europe/Moscow")
         # Reload
         await rb.reload_and_schedule(self.app, self.db, self.sched, "Europe/Moscow")
-        # overdue sent immediately
-        self.assertTrue(any("(Поздно)" in t for _, t in self.app.bot.sent))
+        # overdue sent immediately with localized late_prefix
+        late_prefix = rb.t("ru", "late_prefix")
+        self.assertTrue(any(late_prefix in t for _, t in self.app.bot.sent))
         # scheduled job exists for future
         self.assertIsNotNone(self.sched.scheduler.get_job(f"reminder:{rid2}"))
 

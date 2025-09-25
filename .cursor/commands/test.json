@@ -1,0 +1,4 @@
+{
+  "description": "Запуск юнит/интеграционных тестов (pytest -q)",
+  "run": "bash -lc 'cd /Users/user/repoMac/bot && if [ ! -d .venv ]; then python3 -m venv .venv; fi && . .venv/bin/activate && python -m pip install --upgrade pip >/dev/null && pip install -r requirements.txt >/dev/null && pip install -q pytest >/dev/null && pytest -q | cat'"
+}

@@ -1,0 +1,4 @@
+{
+  "description": "Хвост аудит-лога (локально: ./data/audit.log)",
+  "run": "bash -lc 'cd /Users/user/repoMac/bot && tail -f ./data/audit.log | cat'"
+}

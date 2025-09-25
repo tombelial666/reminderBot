@@ -1,0 +1,4 @@
+{
+  "description": "Локальный запуск бота (использует .telegram_token)",
+  "run": "bash -lc 'cd /Users/user/repoMac/bot && if [ -f .venv/bin/activate ]; then . .venv/bin/activate; fi && python remind_bot.py'"
+}

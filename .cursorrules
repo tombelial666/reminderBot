@@ -1,0 +1,32 @@
+# Cursor Rules for Memo Reminder Bot
+# Language: ru
+
+# Краткая справка по проекту
+- Проект: асинхронный Telegram бот-напоминалка на python-telegram-bot, APScheduler, sqlite.
+- Точка входа: remind_bot.py (функция main → build_application → Application.run_polling).
+- Тесты: pytest (см. tests/). E2E тест опционально с Telethon.
+- Docker: Dockerfile + docker-compose.yml. Volume ./data → /data.
+
+# Предпочтения ассистента
+- Отвечай по-русски.
+- Сохраняй стиль кода: явные имена, ранние выходы, без избыточных try/except.
+- Не добавляй комментарии внутри кода ради объяснений.
+- После любых правок прогоняй pytest (минимум: unit/integ).
+
+# Команды (см. .cursor/commands)
+- test: pytest -q
+- e2e: pytest -q -s tests/test_e2e.py (нужен .env.e2e)
+- docker-build/up/logs: через docker compose
+- venv/deps: создание .venv и установка зависимостей
+- gen-session: генерация Telethon StringSession пользователю
+- run-local: локальный запуск бота
+- audit-tail: просмотр аудита
+
+# Подсказки
+- Токен бота берётся из env или файла .telegram_token (или /data/.telegram_token в Docker).
+- Переменные E2E берутся из .env.e2e (см. README.md).
+- Для офлайн карты город→TZ используются geonamescache и timezonefinder.
+
+# Не трогать
+- Не коммитьте реальные токены/API hash/телефон.
+- Не менять формат audit логов.

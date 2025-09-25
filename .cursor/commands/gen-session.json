@@ -1,0 +1,4 @@
+{
+  "description": "Сгенерировать Telethon StringSession пользователя для E2E",
+  "run": "bash -lc 'cd /Users/user/repoMac/bot && if [ -f .venv/bin/activate ]; then . .venv/bin/activate; fi && python gen_session.py'"
+}
