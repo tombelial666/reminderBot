@@ -1,4 +1,4 @@
-# Cursor Rules for Memo Reminder Bot
+µµµ# Cursor Rules for Memo Reminder Bot
 # Language: ru
 
 # Краткая справка по проекту
@@ -25,7 +25,7 @@
 # Подсказки
 - Токен бота берётся из env или файла .telegram_token (или /data/.telegram_token в Docker).
 - Переменные E2E берутся из .env.e2e (см. README.md).
-- Для офлайн карты город→TZ используются geonamescache и timezonefinder.
+- Для офлайн карты гороµµµµд→TZ используются geonamescache и timezonefinder.
 
 # Не трогать
 - Не коммитьте реальные токены/API hash/телефон.
